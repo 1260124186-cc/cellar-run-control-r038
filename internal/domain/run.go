@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type RunState string
 
@@ -14,25 +17,27 @@ const (
 )
 
 type FermentationRun struct {
-	ID             string               `json:"id"`
-	Code           string               `json:"code"`
-	FormulaID      string               `json:"formula_id"`
-	VesselID       *string              `json:"vessel_id,omitempty"`
-	PlannedVolumeL float64              `json:"planned_volume_liters"`
-	Notes          string               `json:"notes,omitempty"`
-	State          RunState             `json:"state"`
-	StartedAt      *time.Time           `json:"started_at,omitempty"`
-	EndedAt        *time.Time           `json:"ended_at,omitempty"`
-	Observations   []GravityObservation `json:"observations"`
-	Metrics        *RunMetrics          `json:"metrics,omitempty"`
-	Version        int64                `json:"version"`
-	CreatedAt      time.Time            `json:"created_at"`
-	UpdatedAt      time.Time            `json:"updated_at"`
+	ID             string                  `json:"id"`
+	Code           string                  `json:"code"`
+	FormulaID      string                  `json:"formula_id"`
+	VesselID       *string                 `json:"vessel_id,omitempty"`
+	PlannedVolumeL float64                 `json:"planned_volume_liters"`
+	Notes          string                  `json:"notes,omitempty"`
+	State          RunState                `json:"state"`
+	StartedAt      *time.Time              `json:"started_at,omitempty"`
+	EndedAt        *time.Time              `json:"ended_at,omitempty"`
+	Observations   []GravityObservation    `json:"observations"`
+	Corrections    []ObservationCorrection `json:"observation_corrections,omitempty"`
+	Metrics        *RunMetrics             `json:"metrics,omitempty"`
+	Version        int64                   `json:"version"`
+	CreatedAt      time.Time               `json:"created_at"`
+	UpdatedAt      time.Time               `json:"updated_at"`
 }
 
 func (r FermentationRun) Clone() FermentationRun {
 	cloned := r
 	cloned.Observations = append([]GravityObservation(nil), r.Observations...)
+	cloned.Corrections = append([]ObservationCorrection(nil), r.Corrections...)
 	if r.VesselID != nil {
 		value := *r.VesselID
 		cloned.VesselID = &value
@@ -116,6 +121,99 @@ func (r *FermentationRun) AddObservation(observation GravityObservation) error {
 	r.Observations = append(r.Observations, observation)
 	r.UpdatedAt = observation.ReceivedAt.UTC()
 	r.Version++
+	return nil
+}
+
+// CorrectLastObservation applies a controlled correction to the most recent
+// observation. Only a run that has not entered final calculation can be
+// corrected, and only its trailing observation. The original measurement is
+// preserved on the run's correction history together with the reason and the
+// correction time. The replacement must independently satisfy sequence, time
+// ordering, gravity movement, range, and the current state's observation
+// gates; otherwise the run is left untouched.
+func (r *FermentationRun) CorrectLastObservation(
+	sequence int,
+	candidate GravityObservation,
+	reason string,
+	correctedAt time.Time,
+) error {
+	if r.State == RunCompleted || r.State == RunAborted {
+		return NewError(CodeRunState,
+			"completed or aborted runs cannot be corrected")
+	}
+	if r.State != RunFermenting && r.State != RunConditioning {
+		return NewError(CodeRunState,
+			"observations can only be corrected while fermenting or conditioning")
+	}
+	if len(r.Observations) == 0 {
+		return NewError(CodeObservationConflict,
+			"run has no observation to correct")
+	}
+	index := len(r.Observations) - 1
+	target := r.Observations[index]
+	if target.Sequence != sequence {
+		return NewError(CodeObservationConflict,
+			"only the most recent observation can be corrected")
+	}
+	if r.StartedAt == nil {
+		return NewError(CodeRunState, "run has no recorded start")
+	}
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return FieldError(CodeInvalidInput, "reason",
+			"a correction reason is required")
+	}
+	if len([]rune(trimmed)) > 500 {
+		return FieldError(CodeInvalidInput, "reason",
+			"must not exceed 500 characters")
+	}
+	if candidate.Sequence != sequence {
+		return NewError(CodeObservationConflict,
+			"a correction must keep the original observation sequence")
+	}
+
+	candidate.RunID = r.ID
+	stamp := correctedAt.UTC()
+	candidate.ReceivedAt = stamp
+	var previous *GravityObservation
+	if index > 0 {
+		value := r.Observations[index-1]
+		previous = &value
+	}
+	if err := ValidateObservation(*r.StartedAt, previous, candidate, stamp); err != nil {
+		return err
+	}
+
+	candidate.ObservedAt = candidate.ObservedAt.UTC()
+	r.Observations[index] = candidate
+	if err := r.validateObservationGates(); err != nil {
+		// Defensive: restore the original before reporting failure so the
+		// aggregate cannot escape in an invalid state.
+		r.Observations[index] = target
+		return err
+	}
+
+	r.Corrections = append(r.Corrections, ObservationCorrection{
+		Sequence:    sequence,
+		Before:      target,
+		After:       candidate,
+		Reason:      trimmed,
+		CorrectedAt: stamp,
+	})
+	r.UpdatedAt = stamp
+	r.Version++
+	return nil
+}
+
+// validateObservationGates re-establishes the observation-count threshold for
+// the state the run currently holds. A correction never changes the count, so
+// the threshold cannot stop being met; it is rechecked so a correction can
+// never strand the run below its required observation count.
+func (r *FermentationRun) validateObservationGates() error {
+	if r.State == RunConditioning && len(r.Observations) < 2 {
+		return NewError(CodeRunState,
+			"conditioning requires at least two observations")
+	}
 	return nil
 }
 

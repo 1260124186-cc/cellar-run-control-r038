@@ -51,3 +51,15 @@ func ValidateObservation(
 	}
 	return nil
 }
+
+// ObservationCorrection records a controlled correction of the most recent
+// observation. The original measurement, the replacement measurement, the
+// operator-supplied reason, and the correction time are all retained so run
+// details can explain both current facts and correction history.
+type ObservationCorrection struct {
+	Sequence    int                `json:"sequence"`
+	Before      GravityObservation `json:"before"`
+	After       GravityObservation `json:"after"`
+	Reason      string             `json:"reason"`
+	CorrectedAt time.Time          `json:"corrected_at"`
+}

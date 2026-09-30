@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
+	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/service"
 )
 
@@ -24,6 +26,14 @@ type observationRequest struct {
 	TemperatureC float64   `json:"temperature_c"`
 	ObservedAt   time.Time `json:"observed_at"`
 	Note         string    `json:"note"`
+}
+
+type observationCorrectionRequest struct {
+	Gravity      float64   `json:"gravity"`
+	TemperatureC float64   `json:"temperature_c"`
+	ObservedAt   time.Time `json:"observed_at"`
+	Note         string    `json:"note"`
+	Reason       string    `json:"reason"`
 }
 
 func registerRunRoutes(mux *http.ServeMux, app *service.Service) {
@@ -115,6 +125,39 @@ func registerRunRoutes(mux *http.ServeMux, app *service.Service) {
 		}
 		writeJSON(response, http.StatusOK, run)
 	})
+
+	mux.HandleFunc("POST /v1/runs/{id}/observations/{sequence}/correction",
+		func(response http.ResponseWriter, request *http.Request) {
+			body, err := decodeJSON[observationCorrectionRequest](response, request)
+			if !handleDecode(response, err) {
+				return
+			}
+			sequence, err := strconv.Atoi(request.PathValue("sequence"))
+			if err != nil || sequence < 1 {
+				writeDomainError(response, domain.FieldError(domain.CodeInvalidInput,
+					"sequence", "must be a positive observation sequence"))
+				return
+			}
+			expected, err := expectedVersion(request)
+			if !handleDecode(response, err) {
+				return
+			}
+			run, err := app.CorrectObservation(request.PathValue("id"),
+				service.ObservationCorrectionInput{
+					ExpectedVersion: expected,
+					Sequence:        sequence,
+					Gravity:         body.Gravity,
+					TemperatureC:    body.TemperatureC,
+					ObservedAt:      body.ObservedAt,
+					Note:            body.Note,
+					Reason:          body.Reason,
+				})
+			if err != nil {
+				writeDomainError(response, err)
+				return
+			}
+			writeJSON(response, http.StatusOK, run)
+		})
 
 	mux.HandleFunc("POST /v1/runs/{id}/conditioning", func(response http.ResponseWriter, request *http.Request) {
 		expected, err := expectedVersion(request)

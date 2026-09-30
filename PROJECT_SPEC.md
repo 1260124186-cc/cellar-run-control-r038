@@ -65,7 +65,8 @@ States are `available`, `reserved`, `in_use`, `cleaning`, and `retired`.
 
 A run contains an identifier, unique run code, an approved formula identifier,
 an optional vessel identifier, planned volume, notes, lifecycle state,
-timetable, ordered observations, final metrics, version, and timestamps.
+timetable, ordered observations, observation correction history, final
+metrics, version, and timestamps.
 
 States are `planned`, `reserved`, `fermenting`, `conditioning`, `completed`,
 and `aborted`.
@@ -96,6 +97,28 @@ time, gravity, temperature, optional note, and receipt time.
 - Observation times strictly increase within a run.
 - Gravity must not rise more than 0.010 above the immediately preceding value.
 - Observation sequences are contiguous and start at 1.
+
+### ObservationCorrection
+
+A run that has not entered final calculation (a fermenting or conditioning
+run) may have its most recent observation corrected in a controlled way. Each
+correction retains the original observation (including its original receipt
+time), the replacement observation, a non-empty operator reason, and the
+correction time. Completed and aborted runs are immutable and cannot be
+corrected.
+
+- Only the trailing observation sequence can be targeted; interior records
+  and stale aggregate versions are rejected.
+- The sequence number cannot change.
+- The replacement must independently pass the gravity and temperature ranges,
+  the run-start and future-time bounds, strict time ordering against the
+  preceding observation, and the 0.010 gravity-rise limit.
+- After applying the replacement the run must still satisfy its current
+  state's observation gate (two for conditioning, three for completion).
+- Every rejection fails atomically: no observation, correction history, run
+  state, or version is changed on a failed correction.
+- Run details expose both the current observations and the ordered correction
+  history, so the current facts and how they were reached are both visible.
 
 ## Connected Workflows
 
@@ -138,6 +161,7 @@ rules, storage coordination, and resource lifecycle.
 Public entry points are:
 
 - `POST /v1/runs/{id}/observations`
+- `POST /v1/runs/{id}/observations/{sequence}/correction`
 - `POST /v1/runs/{id}/conditioning`
 - `POST /v1/runs/{id}/complete`
 - `GET /v1/runs/{id}`
@@ -146,6 +170,14 @@ The client appends three ordered observations, starts conditioning, completes
 the run, and reads the calculated result. Non-monotonic times, rising gravity,
 out-of-range values, excessive sequences, incomplete data, and repeated
 transitions return stable failures without changing persisted state.
+
+A client can also correct the most recent observation before final
+calculation by supplying the corrected values and a reason, optionally guarded
+by `X-Expected-Version`. Non-tail sequences, stale versions, missing reasons,
+non-monotonic times, excessive gravity rises, and corrections of completed or
+aborted runs fail atomically. The run detail carries both the current
+observations and the correction history (original value, corrected value,
+reason, and correction time).
 
 This path crosses HTTP protocol handling, application orchestration, numeric
 domain rules, and snapshot storage.
@@ -217,6 +249,7 @@ behavior, and exit without external services:
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check observation-correction`
 
 ## Scope Limits
 

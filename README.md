@@ -90,9 +90,33 @@ Run workflow:
 - `POST /v1/runs/{id}/reserve`
 - `POST /v1/runs/{id}/start`
 - `POST /v1/runs/{id}/observations`
+- `POST /v1/runs/{id}/observations/{sequence}/correction`
 - `POST /v1/runs/{id}/conditioning`
 - `POST /v1/runs/{id}/complete`
 - `POST /v1/runs/{id}/abort`
+
+## Observation Corrections
+
+A field-entry mistake no longer requires aborting the run. Before final
+calculation, the most recent observation of a fermenting or conditioning run
+can be corrected:
+
+```
+POST /v1/runs/{id}/observations/{sequence}/correction
+```
+
+The body carries the corrected `gravity`, `temperature_c`, `observed_at`,
+optional `note`, and a required non-empty `reason`. Only the trailing
+observation sequence may be corrected; the sequence itself never changes. The
+replacement is revalidated against the run start, strict time ordering, the
+0.010 gravity-rise limit, value ranges, and the current state's observation
+gate. Every rejection (stale `X-Expected-Version`, interior sequence, invalid
+replacement, or a completed/aborted run) is atomic and changes nothing.
+
+Run details include both the current `observations` and an ordered
+`observation_corrections` history. Each history entry retains the original
+observation (`before`, including its original receipt time), the replacement
+(`after`), the `reason`, and the `corrected_at` timestamp.
 
 Writes accept an optional `X-Expected-Version` header. Errors use a stable
 shape:
@@ -115,6 +139,7 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check observation-correction
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP
