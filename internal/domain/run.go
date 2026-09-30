@@ -152,6 +152,48 @@ func (r *FermentationRun) Complete(originalGravity float64, now time.Time) error
 	return nil
 }
 
+type PreparedRunTransition struct {
+	Run FermentationRun
+}
+
+func (r FermentationRun) PrepareObservation(
+	candidate GravityObservation,
+) (PreparedRunTransition, error) {
+	planned := r.Clone()
+	if err := planned.AddObservation(candidate); err != nil {
+		return PreparedRunTransition{}, err
+	}
+	return PreparedRunTransition{Run: planned.Clone()}, nil
+}
+
+func (r FermentationRun) PrepareCompletion(
+	originalGravity float64,
+) (PreparedRunTransition, error) {
+	planned := r.Clone()
+	if err := planned.Complete(originalGravity, planned.UpdatedAt); err != nil {
+		return PreparedRunTransition{}, err
+	}
+	return PreparedRunTransition{Run: planned.Clone()}, nil
+}
+
+func (p PreparedRunTransition) WithCommitTime(now time.Time) PreparedRunTransition {
+	stamp := now.UTC()
+	p.Run.UpdatedAt = stamp
+	if p.Run.State == RunCompleted {
+		ended := stamp
+		p.Run.EndedAt = &ended
+	}
+	return p
+}
+
+func (p PreparedRunTransition) Apply(snapshot *Snapshot, id string) error {
+	if p.Run.ID == "" || p.Run.ID != id {
+		return NewError(CodeRunState, "prepared transition does not match the target run")
+	}
+	snapshot.Runs[id] = p.Run.Clone()
+	return nil
+}
+
 func (r *FermentationRun) Abort(now time.Time) error {
 	if r.State == RunCompleted || r.State == RunAborted {
 		return NewError(CodeRunState, "completed or aborted runs cannot be aborted")

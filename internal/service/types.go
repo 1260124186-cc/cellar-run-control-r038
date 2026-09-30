@@ -53,3 +53,25 @@ type ObservationInput struct {
 type FinishCleaningInput struct {
 	ExpectedVersion *int64
 }
+
+type preparedRunCommit struct {
+	Run    domain.PreparedRunTransition
+	Vessel *domain.Vessel
+}
+
+func (c preparedRunCommit) apply(snapshot *domain.Snapshot) error {
+	if err := c.Run.Apply(snapshot, c.Run.Run.ID); err != nil {
+		return err
+	}
+	if c.Vessel != nil {
+		snapshot.Vessels[c.Vessel.ID] = *c.Vessel
+	}
+	return nil
+}
+
+func (c *preparedRunCommit) withCommitTime(now time.Time) {
+	c.Run = c.Run.WithCommitTime(now)
+	if c.Vessel != nil {
+		c.Vessel.UpdatedAt = now.UTC()
+	}
+}
