@@ -50,6 +50,16 @@ type ObservationInput struct {
 	Note         string
 }
 
+type ObservationCorrectionInput struct {
+	ExpectedVersion *int64
+	Sequence        int
+	Gravity         float64
+	TemperatureC    float64
+	ObservedAt      time.Time
+	Note            string
+	Reason          string
+}
+
 type FinishCleaningInput struct {
 	ExpectedVersion *int64
 }

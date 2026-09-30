@@ -1,15 +1,46 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type GravityObservation struct {
-	RunID        string    `json:"run_id"`
-	Sequence     int       `json:"sequence"`
-	Gravity      float64   `json:"gravity"`
-	TemperatureC float64   `json:"temperature_c"`
-	ObservedAt   time.Time `json:"observed_at"`
-	Note         string    `json:"note,omitempty"`
-	ReceivedAt   time.Time `json:"received_at"`
+	RunID        string                  `json:"run_id"`
+	Sequence     int                     `json:"sequence"`
+	Gravity      float64                 `json:"gravity"`
+	TemperatureC float64                 `json:"temperature_c"`
+	ObservedAt   time.Time               `json:"observed_at"`
+	Note         string                  `json:"note,omitempty"`
+	ReceivedAt   time.Time               `json:"received_at"`
+	Corrections  []ObservationCorrection `json:"corrections,omitempty"`
+}
+
+// ObservationCorrection is an append-only record of one controlled correction.
+// It preserves the value that was replaced, the operator-supplied reason, and
+// the time the correction occurred. The original receipt time stays with the
+// observation itself.
+type ObservationCorrection struct {
+	PreviousGravity      float64   `json:"previous_gravity"`
+	PreviousTemperatureC float64   `json:"previous_temperature_c"`
+	PreviousObservedAt   time.Time `json:"previous_observed_at"`
+	PreviousNote         string    `json:"previous_note,omitempty"`
+	Reason               string    `json:"reason"`
+	CorrectedAt          time.Time `json:"corrected_at"`
+}
+
+const maxCorrectionReasonRunes = 500
+
+func ValidateCorrectionReason(reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return FieldError(CodeInvalidInput, "reason",
+			"a correction reason is required")
+	}
+	if len([]rune(reason)) > maxCorrectionReasonRunes {
+		return FieldError(CodeInvalidInput, "reason",
+			"must not exceed 500 characters")
+	}
+	return nil
 }
 
 func ValidateObservation(

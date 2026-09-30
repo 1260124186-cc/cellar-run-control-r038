@@ -32,7 +32,15 @@ type FermentationRun struct {
 
 func (r FermentationRun) Clone() FermentationRun {
 	cloned := r
-	cloned.Observations = append([]GravityObservation(nil), r.Observations...)
+	cloned.Observations = make([]GravityObservation, 0, len(r.Observations))
+	for _, observation := range r.Observations {
+		copied := observation
+		if len(observation.Corrections) > 0 {
+			copied.Corrections = append(
+				[]ObservationCorrection(nil), observation.Corrections...)
+		}
+		cloned.Observations = append(cloned.Observations, copied)
+	}
 	if r.VesselID != nil {
 		value := *r.VesselID
 		cloned.VesselID = &value
@@ -116,6 +124,115 @@ func (r *FermentationRun) AddObservation(observation GravityObservation) error {
 	r.Observations = append(r.Observations, observation)
 	r.UpdatedAt = observation.ReceivedAt.UTC()
 	r.Version++
+	return nil
+}
+
+// CorrectObservation applies a controlled correction to the most recent
+// observation. Only a run that has not entered final calculation (fermenting
+// or conditioning) can be corrected, and only its tail observation can change.
+// The replaced value, the reason, and the correction time are appended to that
+// observation's correction history; the original receipt time is retained.
+// Sequence contiguity, strict time order, and gravity movement are rechecked
+// against the preceding observation so the corrected series stays valid.
+func (r *FermentationRun) CorrectObservation(
+	sequence int,
+	candidate GravityObservation,
+	reason string,
+	correctedAt time.Time,
+) error {
+	if r.State == RunCompleted || r.State == RunAborted {
+		return NewError(CodeRunState,
+			"completed or aborted runs are immutable")
+	}
+	if r.State != RunFermenting && r.State != RunConditioning {
+		return NewError(CodeRunState,
+			"observations can only be corrected on a fermenting or conditioning run")
+	}
+	if len(r.Observations) == 0 {
+		return NewError(CodeObservationConflict,
+			"run has no observation to correct")
+	}
+	if err := ValidateCorrectionReason(reason); err != nil {
+		return err
+	}
+	tail := r.Observations[len(r.Observations)-1]
+	if sequence != tail.Sequence {
+		return NewError(CodeObservationConflict,
+			"only the most recent observation can be corrected")
+	}
+
+	candidate.Sequence = tail.Sequence
+	candidate.RunID = r.ID
+	var previous *GravityObservation
+	if len(r.Observations) > 1 {
+		value := r.Observations[len(r.Observations)-2]
+		previous = &value
+	}
+	if err := ValidateObservation(*r.StartedAt, previous, candidate, correctedAt); err != nil {
+		return err
+	}
+
+	stamp := correctedAt.UTC()
+	correction := ObservationCorrection{
+		PreviousGravity:      tail.Gravity,
+		PreviousTemperatureC: tail.TemperatureC,
+		PreviousObservedAt:   tail.ObservedAt.UTC(),
+		PreviousNote:         tail.Note,
+		Reason:               reason,
+		CorrectedAt:          stamp,
+	}
+	candidate.ReceivedAt = tail.ReceivedAt.UTC()
+	candidate.Corrections = append(append([]ObservationCorrection(nil),
+		tail.Corrections...), correction)
+
+	updated := append([]GravityObservation(nil), r.Observations...)
+	updated[len(updated)-1] = candidate
+	if err := ValidateObservationSeries(r.State, *r.StartedAt, updated, stamp); err != nil {
+		return err
+	}
+	r.Observations = updated
+	r.UpdatedAt = stamp
+	r.Version++
+	return nil
+}
+
+// ValidateObservationSeries re-establishes every invariant a committed series
+// must satisfy: contiguous one-based sequences, values within range, observed
+// times that strictly increase after the run start, gravity that never rises
+// more than 0.010 above the preceding value, and the observation-count gate of
+// the run's current lifecycle state. tailCommitAt is used as the "current"
+// reference when checking the tail observation's observed time, since a
+// correction is committed at correction time even though it keeps the
+// original receipt time.
+func ValidateObservationSeries(
+	state RunState,
+	runStartedAt time.Time,
+	observations []GravityObservation,
+	tailCommitAt time.Time,
+) error {
+	var previous *GravityObservation
+	for index := range observations {
+		observation := observations[index]
+		if observation.Sequence != index+1 {
+			return NewError(CodeObservationConflict,
+				"observation sequence must be contiguous and begin at 1")
+		}
+		now := observation.ReceivedAt
+		if index == len(observations)-1 && !tailCommitAt.IsZero() {
+			now = tailCommitAt
+		}
+		if err := ValidateObservation(runStartedAt, previous, observation, now); err != nil {
+			return err
+		}
+		previous = &observations[index]
+	}
+	switch state {
+	case RunConditioning, RunCompleted:
+		if len(observations) < 2 {
+			return NewError(CodeRunState,
+				"conditioning requires at least two observations")
+		}
+	}
 	return nil
 }
 

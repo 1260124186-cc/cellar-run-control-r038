@@ -40,6 +40,45 @@ func (s *Service) AppendObservation(
 	return prepared.Run.Run.Clone(), nil
 }
 
+// CorrectObservation applies a controlled correction to the tail observation
+// of a run that has not entered final calculation. The version gate, the
+// domain correction, and persistence all happen in one serialized transaction,
+// so a stale revision, a non-tail sequence, or any invalid corrected value
+// fails atomically without partial writes.
+func (s *Service) CorrectObservation(
+	id string,
+	input ObservationCorrectionInput,
+) (domain.FermentationRun, error) {
+	correctedAt := s.clock.Now()
+	var updated domain.FermentationRun
+	err := s.store.Execute(func(snapshot *domain.Snapshot) error {
+		run, ok := snapshot.Runs[id]
+		if !ok {
+			return domain.NewError(domain.CodeRunNotFound, "run was not found")
+		}
+		if err := s.checkExpected(run.Version, input.ExpectedVersion); err != nil {
+			return err
+		}
+		candidate := domain.GravityObservation{
+			Gravity:      input.Gravity,
+			TemperatureC: input.TemperatureC,
+			ObservedAt:   input.ObservedAt.UTC(),
+			Note:         input.Note,
+		}
+		if err := run.CorrectObservation(input.Sequence, candidate,
+			input.Reason, correctedAt); err != nil {
+			return err
+		}
+		snapshot.Runs[id] = run.Clone()
+		updated = run.Clone()
+		return nil
+	})
+	if err != nil {
+		return domain.FermentationRun{}, err
+	}
+	return updated, nil
+}
+
 func (s *Service) BeginConditioning(
 	id string,
 	input VersionInput,

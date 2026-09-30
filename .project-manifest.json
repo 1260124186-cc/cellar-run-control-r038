@@ -113,6 +113,27 @@
         "domain",
         "storage"
       ]
+    },
+    {
+      "id": "observation-corrections",
+      "name": "Correct the tail observation before final calculation",
+      "entry": "POST /v1/runs/{id}/observations/correct",
+      "steps": [
+        "append an ordered observation series on a fermenting run",
+        "correct the most recent observation with a mandatory reason",
+        "verify the replaced value, reason, and correction time are preserved",
+        "reject stale versions, non-tail sequences, and series-breaking values",
+        "advance to conditioning, correct again, then complete using corrected facts"
+      ],
+      "success": "returns the run with current observation facts and full correction history",
+      "failure": "returns a stable state, observation, validation, or revision error without partial writes",
+      "verification": "the check issues real HTTP requests and verifies atomic failure and history retention",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "storage"
+      ]
     }
   ]
 }

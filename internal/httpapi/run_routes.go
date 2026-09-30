@@ -26,6 +26,15 @@ type observationRequest struct {
 	Note         string    `json:"note"`
 }
 
+type observationCorrectionRequest struct {
+	Sequence     int       `json:"sequence"`
+	Gravity      float64   `json:"gravity"`
+	TemperatureC float64   `json:"temperature_c"`
+	ObservedAt   time.Time `json:"observed_at"`
+	Note         string    `json:"note"`
+	Reason       string    `json:"reason"`
+}
+
 func registerRunRoutes(mux *http.ServeMux, app *service.Service) {
 	mux.HandleFunc("POST /v1/runs", func(response http.ResponseWriter, request *http.Request) {
 		body, err := decodeJSON[createRunRequest](response, request)
@@ -109,6 +118,32 @@ func registerRunRoutes(mux *http.ServeMux, app *service.Service) {
 			ObservedAt:   body.ObservedAt,
 			Note:         body.Note,
 		})
+		if err != nil {
+			writeDomainError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, run)
+	})
+
+	mux.HandleFunc("POST /v1/runs/{id}/observations/correct", func(response http.ResponseWriter, request *http.Request) {
+		body, err := decodeJSON[observationCorrectionRequest](response, request)
+		if !handleDecode(response, err) {
+			return
+		}
+		expected, err := expectedVersion(request)
+		if !handleDecode(response, err) {
+			return
+		}
+		run, err := app.CorrectObservation(request.PathValue("id"),
+			service.ObservationCorrectionInput{
+				ExpectedVersion: expected,
+				Sequence:        body.Sequence,
+				Gravity:         body.Gravity,
+				TemperatureC:    body.TemperatureC,
+				ObservedAt:      body.ObservedAt,
+				Note:            body.Note,
+				Reason:          body.Reason,
+			})
 		if err != nil {
 			writeDomainError(response, err)
 			return

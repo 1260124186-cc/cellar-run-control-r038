@@ -90,9 +90,26 @@ Run workflow:
 - `POST /v1/runs/{id}/reserve`
 - `POST /v1/runs/{id}/start`
 - `POST /v1/runs/{id}/observations`
+- `POST /v1/runs/{id}/observations/correct`
 - `POST /v1/runs/{id}/conditioning`
 - `POST /v1/runs/{id}/complete`
 - `POST /v1/runs/{id}/abort`
+
+A gravity observation can be corrected after entry under controlled rules:
+
+- only the most recent observation of a fermenting or conditioning run can be
+  corrected (completed and aborted runs are immutable);
+- the request body supplies the corrected values and a mandatory reason;
+- the replaced gravity, temperature, observed time, and note, together with
+  the reason and the correction time, are appended to that observation's
+  `corrections` history, and the original receipt time is retained;
+- sequence contiguity, strict time ordering, gravity movement, value ranges,
+  and the observation-count gates of the current state are revalidated over
+  the whole series;
+- stale versions, non-tail sequences, and corrections that would break later
+  computation fail atomically with a stable error code and no partial write;
+- the run read endpoint returns both the current observation facts and the
+  full correction history.
 
 Writes accept an optional `X-Expected-Version` header. Errors use a stable
 shape:
@@ -115,6 +132,7 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check observation-corrections
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP

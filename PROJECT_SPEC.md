@@ -88,7 +88,8 @@ and `aborted`.
 ### GravityObservation
 
 An observation contains a run identifier, contiguous sequence number, observed
-time, gravity, temperature, optional note, and receipt time.
+time, gravity, temperature, optional note, receipt time, and an append-only
+correction history.
 
 - Gravity is in the inclusive range 0.980 to 1.200.
 - Temperature is in the inclusive range -5 to 60 Celsius.
@@ -96,6 +97,27 @@ time, gravity, temperature, optional note, and receipt time.
 - Observation times strictly increase within a run.
 - Gravity must not rise more than 0.010 above the immediately preceding value.
 - Observation sequences are contiguous and start at 1.
+
+A field-entry error can be corrected without aborting the run. A correction
+applies only to the most recent observation of a run that has not entered
+final calculation, i.e. a run in the `fermenting` or `conditioning` state.
+
+- A correction carries the corrected gravity, temperature, observed time,
+  note, and a mandatory reason.
+- The replaced gravity, temperature, observed time, and note, the reason, and
+  the correction time are appended as one immutable history entry. The
+  original receipt time is retained on the observation.
+- Corrections chain: a corrected observation can be corrected again, and each
+  replaced value is preserved in order.
+- After a correction the entire series must re-satisfy contiguous sequences,
+  strict time ordering after the run start, in-range values, the gravity-rise
+  limit, and the observation-count gates of the current run state.
+- A stale aggregate version, a non-tail or unknown sequence, a correction on a
+  completed or aborted run, and any corrected value that would break a later
+  computation all fail atomically with a stable error code and no partial
+  write.
+- Run details always expose both the current observation facts and the full
+  correction history.
 
 ## Connected Workflows
 
@@ -138,6 +160,7 @@ rules, storage coordination, and resource lifecycle.
 Public entry points are:
 
 - `POST /v1/runs/{id}/observations`
+- `POST /v1/runs/{id}/observations/correct`
 - `POST /v1/runs/{id}/conditioning`
 - `POST /v1/runs/{id}/complete`
 - `GET /v1/runs/{id}`
@@ -146,6 +169,13 @@ The client appends three ordered observations, starts conditioning, completes
 the run, and reads the calculated result. Non-monotonic times, rising gravity,
 out-of-range values, excessive sequences, incomplete data, and repeated
 transitions return stable failures without changing persisted state.
+
+The correction path targets the tail observation before final calculation. It
+records the corrected values with a reason, preserves the replaced values and
+the correction timestamp, revalidates the full series against the current
+state gates, and returns the run with current facts and correction history.
+Stale versions, non-tail sequences, completed or aborted runs, and values that
+would break ordering or gravity movement are rejected atomically.
 
 This path crosses HTTP protocol handling, application orchestration, numeric
 domain rules, and snapshot storage.
@@ -217,6 +247,7 @@ behavior, and exit without external services:
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check observation-corrections`
 
 ## Scope Limits
 
